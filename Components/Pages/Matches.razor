@@ -4,9 +4,15 @@
 @using FootballTournamentManagementSystem.Models
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.EntityFrameworkCore
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ICurrentUserDbContextFactory DbFactory
+@inject AuthenticationStateProvider AuthenticationStateProvider
 
 <PageTitle>Matches</PageTitle>
+
+@if (Saved == "1")
+{
+    <p class="panel-muted">Changes saved.</p>
+}
 
 <div class="page-heading">
     <div>
@@ -14,14 +20,14 @@
         <h1 class="page-title">Matches</h1>
         <p class="page-subtitle">View scheduled fixtures and completed scores.</p>
     </div>
-    <AuthorizeView Roles="Administrator,Tournament Manager">
-        <Authorized>
-            <a class="btn btn-primary" href="/matches/create">Schedule match</a>
-        </Authorized>
-    </AuthorizeView>
+    <a class="btn btn-primary" href="/matches/create">Schedule match</a>
 </div>
 
-@if (matches is null)
+@if (errorMessage is not null)
+{
+    <section class="empty-state"><h2>Unable to load matches</h2><p>@errorMessage</p></section>
+}
+else if (matches is null)
 {
     <p>Loading matches...</p>
 }
@@ -43,6 +49,7 @@ else
                     <span>@match.MatchDate.ToString("MMM d, yyyy")</span>
                 </div>
                 <p class="eyebrow">@match.Tournament.Name · @match.Location</p>
+                <p class="panel-muted">Created by @match.CreatedByUser.FullName · @match.CreatedAt.ToLocalTime().ToString("g")</p>
                 <div class="match-scoreline">
                     <strong>@match.HomeTeam.Name</strong>
                     <span>@match.HomeScore - @match.AwayScore</span>
@@ -50,12 +57,11 @@ else
                 </div>
                 <div class="card-actions">
                     <a href="/matches/@match.Id">Details</a>
-                    <AuthorizeView Roles="Administrator,Tournament Manager">
-                        <Authorized>
+                    @if (CanManage(match))
+                    {
                             <a href="/matches/edit/@match.Id">Edit</a>
                             <a href="/matches/delete/@match.Id">Delete</a>
-                        </Authorized>
-                    </AuthorizeView>
+                    }
                 </div>
             </article>
         }
@@ -63,18 +69,37 @@ else
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "saved")]
+    public string? Saved { get; set; }
+
     private List<Match>? matches;
+    private string? errorMessage;
+    private string? currentUserId;
+    private bool isAdmin;
 
     protected override async Task OnInitializedAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        matches = await db.Matches
-            .AsNoTracking()
-            .Include(match => match.Tournament)
-            .Include(match => match.HomeTeam)
-            .Include(match => match.AwayTeam)
-            .OrderBy(match => match.MatchDate)
-            .ThenBy(match => match.MatchTime)
-            .ToListAsync();
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            isAdmin = user.IsInRole("Admin");
+            await using var db = await DbFactory.CreateDbContextAsync();
+            matches = await db.Matches
+                .AsNoTracking()
+                .Include(match => match.CreatedByUser)
+                .Include(match => match.Tournament)
+                .Include(match => match.HomeTeam)
+                .Include(match => match.AwayTeam)
+                .OrderBy(match => match.MatchDate)
+                .ThenBy(match => match.MatchTime)
+                .ToListAsync();
+        }
+        catch
+        {
+            errorMessage = "Please try again later.";
+        }
     }
+
+    private bool CanManage(IOwnedRecord record) => isAdmin || record.CreatedByUserId == currentUserId;
 }

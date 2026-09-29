@@ -12,7 +12,7 @@ public enum MatchEventType
     PenaltyGoal = 5
 }
 
-public class MatchEvent
+public class MatchEvent : IOwnedRecord
 {
     public int Id { get; set; }
 
@@ -30,7 +30,16 @@ public class MatchEvent
     [Range(1, 120)]
     public int? Minute { get; set; }
 
+    public string CreatedByUserId { get; set; } = null!;
+    public DateTime CreatedAt { get; set; }
+    public string? UpdatedByUserId { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+    [Timestamp]
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+
     public Match Match { get; set; } = null!;
     public Player GoalScorer { get; set; } = null!;
     public Player? AssistedByPlayer { get; set; }
+    public ApplicationUser CreatedByUser { get; set; } = null!;
+    public ApplicationUser? UpdatedByUser { get; set; }
 }

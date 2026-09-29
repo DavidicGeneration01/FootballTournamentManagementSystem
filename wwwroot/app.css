@@ -297,7 +297,8 @@ h1:focus {
 .card-actions a { font-size: .85rem; font-weight: 700; }
 .team-card { align-items: center; display: flex; gap: 1rem; padding: 1.2rem; }
 .team-card h3 { color: var(--ftms-dark); font-size: 1.15rem; margin: 0 0 .35rem; }
-.team-mark { align-items: center; background: var(--ftms-dark); border-radius: 50%; color: #f4c95d; display: flex; flex: 0 0 54px; font-family: Georgia, serif; font-size: 1.7rem; height: 54px; justify-content: center; }
+.team-avatar-wrapper { align-items: center; background-color: #1a253c; border-radius: 50%; box-sizing: border-box; color: #f4c95d; display: flex; flex: 0 0 50px; font-family: Georgia, serif; font-size: 1.4rem; height: 50px; justify-content: center; overflow: hidden; padding: 6px; width: 50px; }
+.team-avatar-wrapper img { background: none !important; display: block; height: 100%; max-height: 100%; max-width: 100%; object-fit: contain; width: 100%; }
 .team-card p:not(.eyebrow) { color: var(--ftms-muted); margin: 0; }
 .player-table-wrapper { background: var(--ftms-paper); border: 1px solid var(--ftms-border); border-radius: 6px; overflow-x: auto; }
 .player-table { border-collapse: collapse; min-width: 700px; width: 100%; }

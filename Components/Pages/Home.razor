@@ -3,11 +3,15 @@
 @using FootballTournamentManagementSystem.Data
 @using FootballTournamentManagementSystem.Models
 @using Microsoft.EntityFrameworkCore
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ICurrentUserDbContextFactory DbFactory
 
 <PageTitle>Dashboard</PageTitle>
 
-@if (summary is null)
+@if (errorMessage is not null)
+{
+	<section class="empty-state"><h2>Unable to load dashboard</h2><p>@errorMessage</p></section>
+}
+else if (summary is null)
 {
 	<p>Loading dashboard...</p>
 }
@@ -90,26 +94,34 @@ else
 
 @code {
 	private DashboardSummary? summary;
+	private string? errorMessage;
 
 	protected override async Task OnInitializedAsync()
 	{
-		await using var db = await DbFactory.CreateDbContextAsync();
-		summary = new DashboardSummary
+		try
 		{
-			Tournaments = await db.Tournaments.CountAsync(),
-			Teams = await db.Teams.CountAsync(),
-			Players = await db.Players.CountAsync(),
-			Matches = await db.Matches.CountAsync(),
-			UpcomingMatches = await db.Matches
-				.AsNoTracking()
-				.Include(match => match.Tournament)
-				.Include(match => match.HomeTeam)
-				.Include(match => match.AwayTeam)
-				.Where(match => match.Status == MatchStatus.Scheduled)
-				.OrderBy(match => match.MatchDate)
-				.Take(4)
-				.ToListAsync()
-		};
+			await using var db = await DbFactory.CreateDbContextAsync();
+			summary = new DashboardSummary
+			{
+				Tournaments = await db.Tournaments.CountAsync(),
+				Teams = await db.Teams.CountAsync(),
+				Players = await db.Players.CountAsync(),
+				Matches = await db.Matches.CountAsync(),
+				UpcomingMatches = await db.Matches
+					.AsNoTracking()
+					.Include(match => match.Tournament)
+					.Include(match => match.HomeTeam)
+					.Include(match => match.AwayTeam)
+					.Where(match => match.Status == MatchStatus.Scheduled)
+					.OrderBy(match => match.MatchDate)
+					.Take(4)
+					.ToListAsync()
+			};
+		}
+		catch
+		{
+			errorMessage = "Please try again later.";
+		}
 	}
 
 	private sealed class DashboardSummary

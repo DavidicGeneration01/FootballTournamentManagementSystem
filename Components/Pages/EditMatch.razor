@@ -1,20 +1,33 @@
 @page "/matches/edit/{Id:int}"
+@page "/matches/{Id:int}/edit"
 @rendermode InteractiveServer
-@attribute [Authorize(Roles = "Administrator,Tournament Manager")]
 @using System.ComponentModel.DataAnnotations
 @using FootballTournamentManagementSystem.Data
 @using FootballTournamentManagementSystem.Models
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
-@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ICurrentUserDbContextFactory DbFactory
+@inject IRecordAccessService RecordAccessService
 @inject NavigationManager Navigation
 
 <PageTitle>Edit Match</PageTitle>
 
-@if (model is null)
+@if (isLoading)
 {
     <p>Loading match...</p>
+}
+else if (loadError is not null)
+{
+    <section class="empty-state"><h2>Unable to load match</h2><p>@loadError</p><a href="/matches">Back to matches</a></section>
+}
+else if (accessDenied)
+{
+    <section class="empty-state"><h2>Access denied</h2><p>You don't have permission to modify this record.</p></section>
+}
+else if (model is null)
+{
+    <section class="empty-state"><h2>Match not found</h2><a href="/matches">Back to matches</a></section>
 }
 else
 {
@@ -100,22 +113,47 @@ else
     private List<Tournament> tournaments = new();
     private List<TeamOption> teams = new();
     private string? errorMessage;
+    private string? loadError;
+    private bool isLoading = true;
+    private bool accessDenied;
 
     protected override async Task OnInitializedAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        tournaments = await db.Tournaments.AsNoTracking().OrderBy(item => item.Name).ToListAsync();
-        teams = await db.Teams.AsNoTracking().Include(item => item.Tournament).OrderBy(item => item.Name)
-            .Select(item => new TeamOption { Id = item.Id, Name = item.Name, Tournament = item.Tournament.Name }).ToListAsync();
-        var match = await db.Matches.AsNoTracking().SingleOrDefaultAsync(item => item.Id == Id);
-        if (match is not null)
+        try
         {
-            model = new MatchInput
+            var access = await RecordAccessService.CheckAsync<Match>(Id);
+            if (access == RecordAccessDecision.Forbidden)
             {
-                TournamentId = match.TournamentId, HomeTeamId = match.HomeTeamId, AwayTeamId = match.AwayTeamId,
-                MatchDate = match.MatchDate, Location = match.Location, Status = match.Status,
-                HomeScore = match.HomeScore, AwayScore = match.AwayScore
-            };
+                accessDenied = true;
+                return;
+            }
+            if (access == RecordAccessDecision.NotFound)
+            {
+                return;
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            tournaments = await db.Tournaments.AsNoTracking().OrderBy(item => item.Name).ToListAsync();
+            teams = await db.Teams.AsNoTracking().OrderBy(item => item.Name)
+                .Select(item => new TeamOption { Id = item.Id, Name = item.Name, Tournament = item.Tournament.Name }).ToListAsync();
+            var match = await db.Matches.AsNoTracking().SingleOrDefaultAsync(item => item.Id == Id);
+            if (match is not null)
+            {
+                model = new MatchInput
+                {
+                    TournamentId = match.TournamentId, HomeTeamId = match.HomeTeamId, AwayTeamId = match.AwayTeamId,
+                    MatchDate = match.MatchDate, Location = match.Location, Status = match.Status,
+                    HomeScore = match.HomeScore, AwayScore = match.AwayScore
+                };
+            }
+        }
+        catch
+        {
+            loadError = "Please try again later.";
+        }
+        finally
+        {
+            isLoading = false;
         }
     }
 
@@ -128,34 +166,53 @@ else
             return;
         }
 
-        await using var db = await DbFactory.CreateDbContextAsync();
-        var validTeams = await db.Teams.CountAsync(team => team.TournamentId == model.TournamentId
-            && (team.Id == model.HomeTeamId || team.Id == model.AwayTeamId));
-        if (validTeams != 2)
+        try
         {
-            errorMessage = "Both selected teams must belong to the selected tournament.";
-            return;
-        }
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var validTeams = await db.Teams.CountAsync(team => team.TournamentId == model.TournamentId
+                && (team.Id == model.HomeTeamId || team.Id == model.AwayTeamId));
+            if (validTeams != 2)
+            {
+                errorMessage = "Both selected teams must belong to the selected tournament.";
+                return;
+            }
 
-        var match = await db.Matches.FindAsync(Id);
-        if (match is null)
+            var match = await db.Matches.FindAsync(Id);
+            if (match is null)
+            {
+                errorMessage = "This match no longer exists.";
+                return;
+            }
+
+            match.TournamentId = model.TournamentId; match.HomeTeamId = model.HomeTeamId; match.AwayTeamId = model.AwayTeamId;
+            match.MatchDate = model.MatchDate; match.Location = model.Location; match.Status = model.Status;
+            match.HomeScore = model.HomeScore; match.AwayScore = model.AwayScore;
+            await db.SaveChangesAsync();
+            Navigation.NavigateTo("/matches?saved=1");
+        }
+        catch (RecordAccessDeniedException exception)
         {
-            Navigation.NavigateTo("/matches");
-            return;
+            errorMessage = exception.Message;
         }
-
-        match.TournamentId = model.TournamentId; match.HomeTeamId = model.HomeTeamId; match.AwayTeamId = model.AwayTeamId;
-        match.MatchDate = model.MatchDate; match.Location = model.Location; match.Status = model.Status;
-        match.HomeScore = model.HomeScore; match.AwayScore = model.AwayScore;
-        await db.SaveChangesAsync();
-        Navigation.NavigateTo("/matches");
+        catch (DbUpdateConcurrencyException)
+        {
+            errorMessage = "This match was changed by someone else. Reload the page before saving again.";
+        }
+        catch (DbUpdateException)
+        {
+            errorMessage = "Unable to save the match. Confirm the tournament and both teams still exist.";
+        }
+        catch
+        {
+            errorMessage = "Unable to save the match. Please try again.";
+        }
     }
 
     private sealed class MatchInput
     {
-        [Required] public int TournamentId { get; set; }
-        [Required] public int HomeTeamId { get; set; }
-        [Required] public int AwayTeamId { get; set; }
+        [Required, Range(1, int.MaxValue)] public int TournamentId { get; set; }
+        [Required, Range(1, int.MaxValue)] public int HomeTeamId { get; set; }
+        [Required, Range(1, int.MaxValue)] public int AwayTeamId { get; set; }
         [Required] public DateTime MatchDate { get; set; }
         [StringLength(200)] public string? Location { get; set; }
         [Range(0, int.MaxValue)] public int HomeScore { get; set; }
