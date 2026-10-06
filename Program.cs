@@ -17,6 +17,8 @@ builder.Services.AddDbContextFactory<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
 builder.Services.AddScoped<ICurrentUserDbContextFactory, CurrentUserDbContextFactory>();
 builder.Services.AddScoped<IRecordAccessService, RecordAccessService>();
+builder.Services.AddScoped<MatchEventValidationService>();
+builder.Services.AddScoped<PlayerStatsService>();
 
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
@@ -118,6 +120,8 @@ using (var scope = app.Services.CreateScope())
                 await userManager.AddToRoleAsync(adminUser, "Admin");
             }
         }
+
+        await DevelopmentDataSeeder.SeedIfEmptyAsync(scope.ServiceProvider);
     }
 }
 

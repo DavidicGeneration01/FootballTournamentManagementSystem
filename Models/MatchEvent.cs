@@ -27,7 +27,7 @@ public class MatchEvent : IOwnedRecord
     [Required]
     public MatchEventType EventType { get; set; }
 
-    [Range(1, 120)]
+    [Range(0, 130)]
     public int? Minute { get; set; }
 
     public string CreatedByUserId { get; set; } = null!;

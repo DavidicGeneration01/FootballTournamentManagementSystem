@@ -286,7 +286,43 @@
     }
 }
 
+@media (hover: hover) and (pointer: fine) {
+    .music-player {
+        transform: translateY(calc(100% - 1.25rem));
+        transition: transform 220ms ease;
+    }
+
+    .music-player:hover,
+    .music-player:focus-within {
+        transform: translateY(0);
+    }
+
+    .music-player::after {
+        position: absolute;
+        right: 0;
+        bottom: 0.45rem;
+        left: 0;
+        width: 2rem;
+        height: 3px;
+        margin: 0 auto;
+        border-radius: 999px;
+        background: var(--mp-accent);
+        content: "";
+        pointer-events: none;
+        transition: opacity 160ms ease;
+    }
+
+    .music-player:hover::after,
+    .music-player:focus-within::after {
+        opacity: 0;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
+    .music-player {
+        transition-duration: 0.01ms !important;
+    }
+
     .music-player *,
     .music-player *::before,
     .music-player *::after {

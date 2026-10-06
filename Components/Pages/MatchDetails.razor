@@ -1,9 +1,13 @@
 @page "/matches/{Id:int}"
 @rendermode InteractiveServer
+@using System.ComponentModel.DataAnnotations
 @using FootballTournamentManagementSystem.Data
 @using FootballTournamentManagementSystem.Models
+@using FootballTournamentManagementSystem.Services
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
+@inject MatchEventValidationService EventValidation
 @inject ICurrentUserDbContextFactory DbFactory
 @inject AuthenticationStateProvider AuthenticationStateProvider
 
@@ -49,18 +53,104 @@ else
     <section class="standings-panel">
         <div class="panel-heading">
             <div>
-                <p class="eyebrow">Score</p>
-                <h2>@match.HomeScore - @match.AwayScore</h2>
+                <p class="eyebrow">@(match.Status == MatchStatus.Ended ? "Final score" : "Score")</p>
+                <h2>@(match.Status == MatchStatus.Ended && scoreError is null ? $"{match.HomeScore} - {match.AwayScore}" : "Not played")</h2>
             </div>
             <span class="status-badge status-@match.Status.ToString().ToLowerInvariant()">@match.Status</span>
         </div>
 
         <div class="match-scoreline">
             <strong>@match.HomeTeam.Name</strong>
-            <span>@match.HomeScore - @match.AwayScore</span>
+            @if (match.Status == MatchStatus.Ended && scoreError is null)
+            {
+                <span>@match.HomeScore - @match.AwayScore <small>@GetResult(match)</small></span>
+            }
+            else if (match.Status == MatchStatus.Ended)
+            {
+                <span>Result unavailable</span>
+            }
+            else
+            {
+                <span>vs</span>
+            }
             <strong>@match.AwayTeam.Name</strong>
         </div>
+        @if (scoreError is not null)
+        {
+            <p class="validation-message">@scoreError</p>
+        }
     </section>
+
+    @if (CanManage(match))
+    {
+        <section class="standings-panel">
+            <div class="panel-heading">
+                <div>
+                    <p class="eyebrow">Goal recording</p>
+                    <h2>Add a goal</h2>
+                </div>
+            </div>
+            @if (goalPlayers.Count == 0)
+            {
+                <p class="panel-muted">Add players to the match teams before recording a goal.</p>
+            }
+            else
+            {
+                <EditForm Model="goalModel" OnValidSubmit="SaveGoal" class="tournament-form">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary />
+                    <div class="form-grid">
+                        <div class="form-field">
+                            <label for="goal-type">Goal type</label>
+                            <InputSelect id="goal-type" @bind-Value="goalModel.EventType" @bind-Value:after="OnGoalTypeChanged">
+                                <option value="@MatchEventType.Goal">Normal</option>
+                                <option value="@MatchEventType.PenaltyGoal">Penalty</option>
+                                <option value="@MatchEventType.OwnGoal">Own goal</option>
+                            </InputSelect>
+                        </div>
+                        <div class="form-field">
+                            <label for="goal-scorer">Scorer</label>
+                            <InputSelect id="goal-scorer" @bind-Value="goalModel.GoalScorerId" @bind-Value:after="OnGoalScorerChanged">
+                                @foreach (var player in goalPlayers)
+                                {
+                                    <option value="@player.Id">@player.Name · @player.Team</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        @if (goalModel.EventType != MatchEventType.OwnGoal)
+                        {
+                            <div class="form-field">
+                                <label for="goal-assister">Assist (optional)</label>
+                                <InputSelect id="goal-assister" @bind-Value="goalModel.AssistedByPlayerId">
+                                    <option value="">None</option>
+                                    @foreach (var player in EligibleAssisters)
+                                    {
+                                        <option value="@player.Id">@player.Name · @player.Team</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                        }
+                        <div class="form-field">
+                            <label for="goal-minute">Minute</label>
+                            <InputNumber id="goal-minute" @bind-Value="goalModel.Minute" />
+                            <ValidationMessage For="@(() => goalModel.Minute)" />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(goalError))
+                    {
+                        <p class="validation-message">@goalError</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(goalSuccess))
+                    {
+                        <p class="panel-muted">@goalSuccess</p>
+                    }
+                    <div class="form-actions">
+                        <button class="btn btn-primary" type="submit" disabled="@isSavingGoal">@(isSavingGoal ? "Recording..." : "Add goal")</button>
+                    </div>
+                </EditForm>
+            }
+        </section>
+    }
 
     <section class="standings-panel">
         <div class="panel-heading">
@@ -113,18 +203,39 @@ else
 
     private Match? match;
     private List<MatchEvent> events = new();
+    private List<GoalPlayerOption> goalPlayers = new();
+    private readonly GoalInput goalModel = new() { EventType = MatchEventType.Goal };
     private string? errorMessage;
+    private string? goalError;
+    private string? goalSuccess;
     private bool isLoading = true;
     private string? currentUserId;
     private bool isAdmin;
+    private string? scoreError;
+    private bool isSavingGoal;
+    private IEnumerable<GoalPlayerOption> EligibleAssisters
+    {
+        get
+        {
+            var scorer = goalPlayers.FirstOrDefault(player => player.Id == goalModel.GoalScorerId);
+            return goalModel.EventType == MatchEventType.OwnGoal || scorer is null
+                ? Enumerable.Empty<GoalPlayerOption>()
+                : goalPlayers.Where(player => player.Id != scorer.Id && player.TeamId == scorer.TeamId);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        isAdmin = user.IsInRole("Admin");
+        await LoadMatchAsync();
+    }
+
+    private async Task LoadMatchAsync()
+    {
         try
         {
-            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
-            currentUserId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            isAdmin = user.IsInRole("Admin");
             await using var db = await DbFactory.CreateDbContextAsync();
             match = await db.Matches
                 .AsNoTracking()
@@ -137,6 +248,17 @@ else
 
             if (match is not null)
             {
+                var score = await MatchScoreCalculator.CalculateAsync(db, new[] { match.Id });
+                if (score.TryGetValue(match.Id, out var calculatedScore))
+                {
+                    scoreError = calculatedScore.ValidationError;
+                    if (scoreError is null)
+                    {
+                        match.HomeScore = calculatedScore.HomeScore;
+                        match.AwayScore = calculatedScore.AwayScore;
+                    }
+                }
+
                 events = await db.MatchEvents
                     .AsNoTracking()
                     .Include(item => item.GoalScorer)
@@ -146,6 +268,25 @@ else
                     .Where(item => item.MatchId == Id)
                     .OrderBy(item => item.Minute ?? 121)
                     .ToListAsync();
+
+                goalPlayers = await db.Players.AsNoTracking()
+                    .Where(player => player.TeamId == match.HomeTeamId || player.TeamId == match.AwayTeamId)
+                    .OrderBy(player => player.Team.Name)
+                    .ThenBy(player => player.LastName)
+                    .ThenBy(player => player.FirstName)
+                    .Select(player => new GoalPlayerOption
+                    {
+                        Id = player.Id,
+                        Name = player.FirstName + " " + player.LastName,
+                        Team = player.Team.Name,
+                        TeamId = player.TeamId
+                    })
+                    .ToListAsync();
+
+                if (goalPlayers.Count > 0 && !goalPlayers.Any(player => player.Id == goalModel.GoalScorerId))
+                {
+                    goalModel.GoalScorerId = goalPlayers[0].Id;
+                }
             }
         }
         catch
@@ -158,5 +299,119 @@ else
         }
     }
 
+    private async Task SaveGoal()
+    {
+        if (match is null || isSavingGoal)
+        {
+            return;
+        }
+
+        isSavingGoal = true;
+        goalError = null;
+        goalSuccess = null;
+        try
+        {
+            var validationError = await EventValidation.ValidateAsync(
+                match.Id,
+                goalModel.EventType,
+                goalModel.GoalScorerId,
+                goalModel.AssistedByPlayerId,
+                goalModel.Minute);
+            if (validationError is not null)
+            {
+                goalError = validationError;
+                return;
+            }
+
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                db.MatchEvents.Add(new MatchEvent
+                {
+                    MatchId = match.Id,
+                    GoalScorerId = goalModel.GoalScorerId,
+                    AssistedByPlayerId = goalModel.AssistedByPlayerId,
+                    EventType = goalModel.EventType,
+                    Minute = goalModel.Minute
+                });
+                await db.SaveChangesAsync();
+            }
+
+            goalModel.EventType = MatchEventType.Goal;
+            goalModel.AssistedByPlayerId = null;
+            goalModel.Minute = null;
+            await LoadMatchAsync();
+            goalSuccess = "Goal recorded.";
+        }
+        catch (RecordAccessDeniedException exception)
+        {
+            goalError = exception.Message;
+        }
+        catch (InvalidOperationException exception)
+        {
+            goalError = exception.Message;
+        }
+        catch (DbUpdateException)
+        {
+            goalError = "Unable to save the goal because the match or player is no longer available.";
+        }
+        catch
+        {
+            goalError = "Unable to save the goal. Please try again.";
+        }
+        finally
+        {
+            isSavingGoal = false;
+        }
+    }
+
+    private Task OnGoalTypeChanged()
+    {
+        if (goalModel.EventType == MatchEventType.OwnGoal)
+        {
+            goalModel.AssistedByPlayerId = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task OnGoalScorerChanged()
+    {
+        if (!EligibleAssisters.Any(player => player.Id == goalModel.AssistedByPlayerId))
+        {
+            goalModel.AssistedByPlayerId = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
     private bool CanManage(IOwnedRecord record) => isAdmin || record.CreatedByUserId == currentUserId;
+
+    private static string GetResult(Match match) => match.HomeScore.CompareTo(match.AwayScore) switch
+    {
+        > 0 => "Home win",
+        < 0 => "Away win",
+        _ => "Draw"
+    };
+
+    private sealed class GoalInput
+    {
+        [Required, Range(1, int.MaxValue)]
+        public int GoalScorerId { get; set; }
+
+        public int? AssistedByPlayerId { get; set; }
+
+        [Required]
+        public MatchEventType EventType { get; set; }
+
+        [Required, Range(0, 130)]
+        public int? Minute { get; set; }
+    }
+
+    private sealed class GoalPlayerOption
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Team { get; set; } = string.Empty;
+        public int TeamId { get; set; }
+    }
 }

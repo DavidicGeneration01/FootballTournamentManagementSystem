@@ -10,6 +10,7 @@
 @inject ICurrentUserDbContextFactory DbFactory
 @inject IRecordAccessService RecordAccessService
 @inject NavigationManager Navigation
+@inject MatchEventValidationService EventValidation
 
 <PageTitle>Edit Match Event</PageTitle>
 
@@ -45,8 +46,10 @@ else
             <div class="form-grid">
                 <div class="form-field">
                     <label for="event-type">Event type</label>
-                    <InputSelect id="event-type" @bind-Value="model.EventType">
-                        @foreach (var eventType in Enum.GetValues<MatchEventType>())
+                    <InputSelect id="event-type" @bind-Value="model.EventType" @bind-Value:after="OnEventTypeChanged">
+                        <option value="@MatchEventType.Goal">Normal</option>
+                        <option value="@MatchEventType.PenaltyGoal">Penalty</option>
+                        @foreach (var eventType in Enum.GetValues<MatchEventType>().Where(item => item is not MatchEventType.Goal and not MatchEventType.PenaltyGoal))
                         {
                             <option value="@eventType">@eventType</option>
                         }
@@ -54,23 +57,26 @@ else
                 </div>
                 <div class="form-field">
                     <label for="scorer">Player</label>
-                    <InputSelect id="scorer" @bind-Value="model.GoalScorerId">
+                    <InputSelect id="scorer" @bind-Value="model.GoalScorerId" @bind-Value:after="OnScorerChanged">
                         @foreach (var player in players)
                         {
                             <option value="@player.Id">@player.Name - @player.Team</option>
                         }
                     </InputSelect>
                 </div>
-                <div class="form-field">
-                    <label for="assist">Assist (optional)</label>
-                    <InputSelect id="assist" @bind-Value="model.AssistedByPlayerId">
-                        <option value="">None</option>
-                        @foreach (var player in players)
-                        {
-                            <option value="@player.Id">@player.Name - @player.Team</option>
-                        }
-                    </InputSelect>
-                </div>
+                @if (model.EventType != MatchEventType.OwnGoal)
+                {
+                    <div class="form-field">
+                        <label for="assist">Assist (optional)</label>
+                        <InputSelect id="assist" @bind-Value="model.AssistedByPlayerId">
+                            <option value="">None</option>
+                            @foreach (var player in EligibleAssisters)
+                            {
+                                <option value="@player.Id">@player.Name - @player.Team</option>
+                            }
+                        </InputSelect>
+                    </div>
+                }
                 <div class="form-field">
                     <label for="minute">Minute</label>
                     <InputNumber id="minute" @bind-Value="model.Minute" />
@@ -100,6 +106,16 @@ else
     private string? loadError;
     private bool accessDenied;
     private bool isLoading = true;
+    private IEnumerable<PlayerOption> EligibleAssisters
+    {
+        get
+        {
+            var scorer = players?.FirstOrDefault(player => player.Id == model?.GoalScorerId);
+            return model?.EventType == MatchEventType.OwnGoal || scorer is null
+                ? Enumerable.Empty<PlayerOption>()
+                : players!.Where(player => player.Id != scorer.Id && player.TeamId == scorer.TeamId);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -142,7 +158,8 @@ else
                 {
                     Id = item.Id,
                     Name = item.FirstName + " " + item.LastName,
-                    Team = item.Team.Name
+                    Team = item.Team.Name,
+                    TeamId = item.TeamId
                 })
                 .ToListAsync();
         }
@@ -159,27 +176,31 @@ else
 
     private async Task SaveEvent()
     {
+        if (model is null || matchEvent is null)
+        {
+            return;
+        }
+
         try
         {
+            var validationError = await EventValidation.ValidateAsync(
+                matchEvent.MatchId,
+                model.EventType,
+                model.GoalScorerId,
+                model.AssistedByPlayerId,
+                model.Minute);
+            if (validationError is not null)
+            {
+                errorMessage = validationError;
+                return;
+            }
+
             await using var db = await DbFactory.CreateDbContextAsync();
             var eventToUpdate = await db.MatchEvents.Include(item => item.Match)
                 .SingleOrDefaultAsync(item => item.Id == Id && (!MatchId.HasValue || item.MatchId == MatchId.Value));
             if (eventToUpdate is null)
             {
                 errorMessage = "The match event no longer exists.";
-                return;
-            }
-
-            var scorer = await db.Players.AsNoTracking().SingleOrDefaultAsync(item => item.Id == model!.GoalScorerId);
-            var assister = model!.AssistedByPlayerId.HasValue
-                ? await db.Players.AsNoTracking().SingleOrDefaultAsync(item => item.Id == model.AssistedByPlayerId.Value)
-                : null;
-            if (scorer is null || model.AssistedByPlayerId.HasValue && assister is null
-                || assister is not null && assister.Id == scorer.Id
-                || scorer.TeamId != eventToUpdate.Match.HomeTeamId && scorer.TeamId != eventToUpdate.Match.AwayTeamId
-                || assister is not null && assister.TeamId != eventToUpdate.Match.HomeTeamId && assister.TeamId != eventToUpdate.Match.AwayTeamId)
-            {
-                errorMessage = "Select players from one of the teams in this match and use a different optional assister.";
                 return;
             }
 
@@ -209,7 +230,7 @@ else
         [Required, Range(1, int.MaxValue)] public int GoalScorerId { get; set; }
         public int? AssistedByPlayerId { get; set; }
         [Required] public MatchEventType EventType { get; set; }
-        [Range(1, 120)] public int? Minute { get; set; }
+        [Range(0, 130)] public int? Minute { get; set; }
     }
 
     private sealed class PlayerOption
@@ -217,5 +238,26 @@ else
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Team { get; set; } = string.Empty;
+        public int TeamId { get; set; }
+    }
+
+    private Task OnEventTypeChanged()
+    {
+        if (model?.EventType == MatchEventType.OwnGoal)
+        {
+            model.AssistedByPlayerId = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task OnScorerChanged()
+    {
+        if (model is not null && !EligibleAssisters.Any(player => player.Id == model.AssistedByPlayerId))
+        {
+            model.AssistedByPlayerId = null;
+        }
+
+        return Task.CompletedTask;
     }
 }

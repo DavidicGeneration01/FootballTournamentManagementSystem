@@ -1,4 +1,5 @@
 using FootballTournamentManagementSystem.Models;
+using FootballTournamentManagementSystem.Services;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
@@ -167,10 +168,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public override int SaveChanges() => SaveChanges(acceptAllChangesOnSuccess: true);
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
-    {
-        PrepareOwnershipChangesAsync(CancellationToken.None).GetAwaiter().GetResult();
-        return base.SaveChanges(acceptAllChangesOnSuccess);
-    }
+        => SaveChangesWithMatchScoresAsync(acceptAllChangesOnSuccess, CancellationToken.None).GetAwaiter().GetResult();
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         => SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken);
@@ -179,8 +177,85 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         bool acceptAllChangesOnSuccess,
         CancellationToken cancellationToken = default)
     {
-        await PrepareOwnershipChangesAsync(cancellationToken);
-        return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        return await SaveChangesWithMatchScoresAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private async Task<int> SaveChangesWithMatchScoresAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken)
+    {
+        ChangeTracker.DetectChanges();
+        var affectedMatchIds = ChangeTracker.Entries<MatchEvent>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .SelectMany(entry => entry.State == EntityState.Added
+                ? new[] { entry.Entity.MatchId }
+                : new[] { entry.Entity.MatchId, (int)entry.Property(item => item.MatchId).OriginalValue! })
+            .Concat(ChangeTracker.Entries<Match>()
+                .Where(entry => entry.State is EntityState.Added or EntityState.Modified)
+                .Select(entry => entry.Entity.Id))
+            .Where(id => id > 0)
+            .Distinct()
+            .ToArray();
+
+        await using var transaction = affectedMatchIds.Length > 0
+            && Database.IsRelational()
+            && Database.CurrentTransaction is null
+                ? await Database.BeginTransactionAsync(cancellationToken)
+                : null;
+
+        try
+        {
+            await PrepareOwnershipChangesAsync(cancellationToken);
+            var rowsWritten = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+
+            if (affectedMatchIds.Length > 0)
+            {
+                var scores = await MatchScoreCalculator.CalculateAsync(
+                    this,
+                    affectedMatchIds,
+                    includeAllOwners: true,
+                    cancellationToken: cancellationToken);
+
+                foreach (var (matchId, score) in scores)
+                {
+                    if (score.ValidationError is not null)
+                    {
+                        throw new InvalidOperationException(score.ValidationError);
+                    }
+
+                    var match = await Matches.IgnoreQueryFilters()
+                        .SingleOrDefaultAsync(item => item.Id == matchId, cancellationToken);
+                    if (match is not null && (match.HomeScore != score.HomeScore || match.AwayScore != score.AwayScore))
+                    {
+                        match.HomeScore = score.HomeScore;
+                        match.AwayScore = score.AwayScore;
+                        match.UpdatedByUserId = CurrentUserId;
+                        match.UpdatedAt = DateTime.UtcNow;
+                    }
+                }
+
+                if (ChangeTracker.HasChanges())
+                {
+                    rowsWritten += await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+                }
+            }
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            return rowsWritten;
+        }
+        catch
+        {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+            }
+
+            throw;
+        }
     }
 
     private async Task PrepareOwnershipChangesAsync(CancellationToken cancellationToken)
@@ -293,6 +368,24 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                         || !IsAdmin && playerTeams.Any(player => player.CreatedByUserId != CurrentUserId))
                     {
                         throw new RecordAccessDeniedException("Match event players must belong to one of the two teams.");
+                    }
+
+                    var scorerTeamId = playerTeams.Single(player => player.Id == matchEvent.GoalScorerId).TeamId;
+                    int? assisterTeamId = matchEvent.AssistedByPlayerId.HasValue
+                        ? playerTeams.Single(player => player.Id == matchEvent.AssistedByPlayerId.Value).TeamId
+                        : null;
+                    var validationError = MatchEventValidationService.ValidateParticipants(
+                        match.HomeTeamId,
+                        match.AwayTeamId,
+                        matchEvent.EventType,
+                        matchEvent.GoalScorerId,
+                        scorerTeamId,
+                        matchEvent.AssistedByPlayerId,
+                        assisterTeamId,
+                        matchEvent.Minute);
+                    if (validationError is not null)
+                    {
+                        throw new InvalidOperationException(validationError);
                     }
                 }
             }

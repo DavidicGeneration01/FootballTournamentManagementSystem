@@ -6,8 +6,10 @@
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.Data.SqlClient
 @inject ICurrentUserDbContextFactory DbFactory
 @inject NavigationManager Navigation
+@inject ILogger<CreatePlayer> Logger
 
 <PageTitle>Add Player</PageTitle>
 
@@ -129,7 +131,7 @@ else
         try
         {
             await using var db = await DbFactory.CreateDbContextAsync();
-            var duplicateExists = await db.Players.AnyAsync(player =>
+            var duplicateExists = await db.Players.IgnoreQueryFilters().AnyAsync(player =>
                 player.TeamId == model.TeamId && player.JerseyNumber == model.JerseyNumber);
 
             if (duplicateExists)
@@ -154,14 +156,28 @@ else
         {
             errorMessage = exception.Message;
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException exception)
         {
-            errorMessage = "Unable to save the player. Check that the team exists and the jersey number is unique.";
+            Logger.LogError(exception, "Database error while creating a player.");
+            errorMessage = GetSaveErrorMessage(exception);
         }
-        catch
+        catch (Exception exception)
         {
+            Logger.LogError(exception, "Unexpected error while creating a player.");
             errorMessage = "Unable to save the player. Please try again.";
         }
+    }
+
+    private static string GetSaveErrorMessage(DbUpdateException exception)
+    {
+        return exception.GetBaseException() is SqlException sqlException
+            ? sqlException.Number switch
+            {
+                2601 or 2627 => "That jersey number is already assigned on the selected team.",
+                547 => "The selected team or another related record is no longer available. Refresh the page and try again.",
+                _ => "Unable to save the player because the database rejected the changes. Please try again."
+            }
+            : "Unable to save the player because the database rejected the changes. Please try again.";
     }
 
     private sealed class PlayerInput
