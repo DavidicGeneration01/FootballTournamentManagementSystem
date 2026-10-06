@@ -4,9 +4,26 @@
     ViewData["Title"] = "Log out";
 }
 
-<h1>Log out</h1>
-<p>Are you sure you want to log out?</p>
+<main class="account-shell">
+    <section class="account-intro">
+        <span class="account-kicker">Football Tournament Management</span>
+        <h1>Take a breather.</h1>
+        <p>Your fixtures, results, and tournament details will be here when you return.</p>
+        <div class="account-scoreline" aria-hidden="true">
+            <span>SESSION</span>
+            <strong>FTMS</strong>
+        </div>
+    </section>
 
-<form method="post">
-    <button type="submit">Log out</button>
-</form>
+    <section class="account-panel logout-panel">
+        <p class="eyebrow">Account</p>
+        <h2>Log out?</h2>
+        <p class="account-muted">Are you sure you want to end your session?</p>
+        <div class="logout-actions">
+            <form method="post">
+                <button class="logout-submit" type="submit">Log out</button>
+            </form>
+            <a class="logout-stay" href="/">Stay signed in</a>
+        </div>
+    </section>
+</main>

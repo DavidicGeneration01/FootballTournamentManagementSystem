@@ -4,6 +4,7 @@
 @using System.ComponentModel.DataAnnotations
 @using FootballTournamentManagementSystem.Data
 @using FootballTournamentManagementSystem.Models
+@using FootballTournamentManagementSystem.Services
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.EntityFrameworkCore
@@ -84,15 +85,9 @@ else
                         }
                     </InputSelect>
                 </div>
-                <div class="form-field">
-                    <label for="home-score">Home score</label>
-                    <InputNumber id="home-score" @bind-Value="model.HomeScore" />
-                    <ValidationMessage For="@(() => model.HomeScore)" />
-                </div>
-                <div class="form-field">
-                    <label for="away-score">Away score</label>
-                    <InputNumber id="away-score" @bind-Value="model.AwayScore" />
-                    <ValidationMessage For="@(() => model.AwayScore)" />
+                <div class="form-field form-field-wide">
+                    <label>Score</label>
+                    <p class="form-static-value">@model.HomeScore - @model.AwayScore · Calculated from goal events</p>
                 </div>
             </div>
             @if (!string.IsNullOrWhiteSpace(errorMessage))
@@ -139,11 +134,13 @@ else
             var match = await db.Matches.AsNoTracking().SingleOrDefaultAsync(item => item.Id == Id);
             if (match is not null)
             {
+                var scores = await MatchScoreCalculator.CalculateAsync(db, new[] { match.Id });
                 model = new MatchInput
                 {
                     TournamentId = match.TournamentId, HomeTeamId = match.HomeTeamId, AwayTeamId = match.AwayTeamId,
                     MatchDate = match.MatchDate, Location = match.Location, Status = match.Status,
-                    HomeScore = match.HomeScore, AwayScore = match.AwayScore
+                    HomeScore = scores.TryGetValue(match.Id, out var score) ? score.HomeScore : match.HomeScore,
+                    AwayScore = scores.TryGetValue(match.Id, out score) ? score.AwayScore : match.AwayScore
                 };
             }
         }
@@ -184,6 +181,23 @@ else
                 return;
             }
 
+            if (model.Status == MatchStatus.Ended)
+            {
+                var teamOverrides = new Dictionary<int, (int HomeTeamId, int AwayTeamId)>
+                {
+                    [Id] = (model.HomeTeamId, model.AwayTeamId)
+                };
+                var scores = await MatchScoreCalculator.CalculateAsync(db, new[] { Id }, teamOverrides: teamOverrides);
+                if (!scores.TryGetValue(Id, out var score) || score.ValidationError is not null)
+                {
+                    errorMessage = score?.ValidationError ?? "The score could not be calculated from the recorded goal events.";
+                    return;
+                }
+
+                model.HomeScore = score.HomeScore;
+                model.AwayScore = score.AwayScore;
+            }
+
             match.TournamentId = model.TournamentId; match.HomeTeamId = model.HomeTeamId; match.AwayTeamId = model.AwayTeamId;
             match.MatchDate = model.MatchDate; match.Location = model.Location; match.Status = model.Status;
             match.HomeScore = model.HomeScore; match.AwayScore = model.AwayScore;
@@ -206,6 +220,7 @@ else
         {
             errorMessage = "Unable to save the match. Please try again.";
         }
+
     }
 
     private sealed class MatchInput
@@ -215,8 +230,8 @@ else
         [Required, Range(1, int.MaxValue)] public int AwayTeamId { get; set; }
         [Required] public DateTime MatchDate { get; set; }
         [StringLength(200)] public string? Location { get; set; }
-        [Range(0, int.MaxValue)] public int HomeScore { get; set; }
-        [Range(0, int.MaxValue)] public int AwayScore { get; set; }
+        public int HomeScore { get; set; }
+        public int AwayScore { get; set; }
         public MatchStatus Status { get; set; }
     }
 

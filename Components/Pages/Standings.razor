@@ -32,10 +32,11 @@ else if (tournaments.Count == 0)
 }
 else
 {
-    @foreach (var tournament in tournaments)
-    {
-        var table = standingsByTournament.TryGetValue(tournament.Id, out var rows) ? rows : new List<StandingsRow>();
-        <section class="standings-panel">
+    <div class="league-list">
+        @foreach (var tournament in tournaments)
+        {
+            var table = standingsByTournament.TryGetValue(tournament.Id, out var rows) ? rows : new List<StandingsRow>();
+            <section class="standings-panel">
             <div class="panel-heading">
                 <div>
                     <p class="eyebrow">@tournament.Location</p>
@@ -86,13 +87,64 @@ else
                     </table>
                 </div>
             }
-        </section>
-    }
+
+            @{
+                var leaders = leadersByTournament.TryGetValue(tournament.Id, out var tournamentLeaders)
+                    ? tournamentLeaders
+                    : new TournamentLeaders();
+            }
+            <div class="event-list">
+                <section class="event-group">
+                    <div class="event-group-heading">
+                        <h2>Goal scorers</h2>
+                    </div>
+                    @if (leaders.GoalScorers.Count == 0)
+                    {
+                        <p class="panel-muted">No goals recorded yet.</p>
+                    }
+                    else
+                    {
+                        @foreach (var leader in leaders.GoalScorers)
+                        {
+                            <div class="event-row">
+                                <strong>@leader.PlayerName</strong>
+                                <span>@leader.TeamName</span>
+                                <span>@leader.Count goals</span>
+                            </div>
+                        }
+                    }
+                </section>
+
+                <section class="event-group">
+                    <div class="event-group-heading">
+                        <h2>Assist providers</h2>
+                    </div>
+                    @if (leaders.AssistProviders.Count == 0)
+                    {
+                        <p class="panel-muted">No assists recorded yet.</p>
+                    }
+                    else
+                    {
+                        @foreach (var leader in leaders.AssistProviders)
+                        {
+                            <div class="event-row">
+                                <strong>@leader.PlayerName</strong>
+                                <span>@leader.TeamName</span>
+                                <span>@leader.Count assists</span>
+                            </div>
+                        }
+                    }
+                </section>
+            </div>
+            </section>
+        }
+    </div>
 }
 
 @code {
     private List<Tournament>? tournaments;
     private Dictionary<int, List<StandingsRow>> standingsByTournament = new();
+    private Dictionary<int, TournamentLeaders> leadersByTournament = new();
     private string? errorMessage;
 
     protected override async Task OnInitializedAsync()
@@ -116,6 +168,7 @@ else
                 if (teams.Count == 0)
                 {
                     standingsByTournament[tournament.Id] = new List<StandingsRow>();
+                    leadersByTournament[tournament.Id] = new TournamentLeaders();
                     continue;
                 }
 
@@ -141,6 +194,35 @@ else
                     .AsNoTracking()
                     .Where(match => match.TournamentId == tournament.Id && match.Status == MatchStatus.Ended)
                     .ToListAsync();
+
+                var goalEvents = await db.MatchEvents
+                    .AsNoTracking()
+                    .Where(matchEvent => matchEvent.Match.TournamentId == tournament.Id
+                        && matchEvent.Match.Status == MatchStatus.Ended
+                        && (matchEvent.EventType == MatchEventType.Goal || matchEvent.EventType == MatchEventType.PenaltyGoal))
+                    .Select(matchEvent => new
+                    {
+                        matchEvent.GoalScorerId,
+                        GoalScorerName = matchEvent.GoalScorer.FirstName + " " + matchEvent.GoalScorer.LastName,
+                        GoalScorerTeamName = matchEvent.GoalScorer.Team.Name,
+                        matchEvent.AssistedByPlayerId,
+                        AssistedByPlayerName = matchEvent.AssistedByPlayer == null
+                            ? null
+                            : matchEvent.AssistedByPlayer.FirstName + " " + matchEvent.AssistedByPlayer.LastName,
+                        AssistedByTeamName = matchEvent.AssistedByPlayer == null ? null : matchEvent.AssistedByPlayer.Team.Name
+                    })
+                    .ToListAsync();
+
+                leadersByTournament[tournament.Id] = new TournamentLeaders
+                {
+                    GoalScorers = OrderLeaderboard(goalEvents
+                        .GroupBy(goal => new { goal.GoalScorerId, goal.GoalScorerName, goal.GoalScorerTeamName })
+                        .Select(group => new PlayerLeader(group.Key.GoalScorerTeamName, group.Key.GoalScorerName, group.Count()))),
+                    AssistProviders = OrderLeaderboard(goalEvents
+                        .Where(goal => goal.AssistedByPlayerId.HasValue && goal.AssistedByPlayerName is not null && goal.AssistedByTeamName is not null)
+                        .GroupBy(goal => new { PlayerId = goal.AssistedByPlayerId!.Value, PlayerName = goal.AssistedByPlayerName!, TeamName = goal.AssistedByTeamName! })
+                        .Select(group => new PlayerLeader(group.Key.TeamName, group.Key.PlayerName, group.Count())))
+                };
 
                 foreach (var match in matches)
                 {
@@ -191,6 +273,7 @@ else
                 {
                     orderedRows[index].Position = index + 1;
                 }
+
                 standingsByTournament[tournament.Id] = orderedRows;
             }
         }
@@ -199,6 +282,22 @@ else
             errorMessage = "Please try again later.";
         }
     }
+
+    private static List<PlayerLeader> OrderLeaderboard(IEnumerable<PlayerLeader> players)
+    {
+        return players
+            .OrderByDescending(player => player.Count)
+            .ThenBy(player => player.PlayerName)
+            .ToList();
+    }
+
+    private sealed class TournamentLeaders
+    {
+        public List<PlayerLeader> GoalScorers { get; set; } = new();
+        public List<PlayerLeader> AssistProviders { get; set; } = new();
+    }
+
+    private sealed record PlayerLeader(string TeamName, string PlayerName, int Count);
 
     private sealed class StandingsRow
     {

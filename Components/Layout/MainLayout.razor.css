@@ -36,9 +36,16 @@ main {
         text-overflow: ellipsis;
     }
 
-@media (max-width: 640.98px) {
+@media (max-width: 1199.98px) {
+    .sidebar,
+    main {
+        min-width: 0;
+        width: 100%;
+    }
+
     .top-row {
         justify-content: space-between;
+        width: 100%;
     }
 
     .top-row ::deep a, .top-row ::deep .btn-link {
@@ -46,16 +53,21 @@ main {
     }
 }
 
-@media (min-width: 641px) {
+@media (min-width: 1200px) {
     .page {
         flex-direction: row;
     }
 
     .sidebar {
+        flex: 0 0 250px;
         width: 250px;
         height: 100vh;
         position: sticky;
         top: 0;
+    }
+
+    main {
+        min-width: 0;
     }
 
     .top-row {
