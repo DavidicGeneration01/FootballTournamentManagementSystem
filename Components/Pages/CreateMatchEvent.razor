@@ -163,6 +163,44 @@ else
             return;
         }
 
+        if (match.Status == MatchStatus.Ended
+            && model.EventType is MatchEventType.Goal or MatchEventType.PenaltyGoal or MatchEventType.OwnGoal)
+        {
+            var goalEvents = await db.MatchEvents
+                .Where(item => item.MatchId == match.Id
+                    && (item.EventType == MatchEventType.Goal
+                        || item.EventType == MatchEventType.PenaltyGoal
+                        || item.EventType == MatchEventType.OwnGoal))
+                .Select(item => new { item.EventType, ScorerTeamId = item.GoalScorer.TeamId })
+                .ToListAsync();
+
+            var homeEventGoals = 0;
+            var awayEventGoals = 0;
+            foreach (var goalEvent in goalEvents)
+            {
+                var scoredByHomeTeam = goalEvent.ScorerTeamId == match.HomeTeamId;
+                if (goalEvent.EventType == MatchEventType.OwnGoal)
+                {
+                    if (scoredByHomeTeam) awayEventGoals++;
+                    else homeEventGoals++;
+                }
+                else if (scoredByHomeTeam) homeEventGoals++;
+                else awayEventGoals++;
+            }
+
+            var newGoalIsForHomeTeam = model.EventType == MatchEventType.OwnGoal
+                ? scorer.TeamId == match.AwayTeamId
+                : scorer.TeamId == match.HomeTeamId;
+            if (newGoalIsForHomeTeam) homeEventGoals++;
+            else awayEventGoals++;
+
+            if (homeEventGoals > match.HomeScore || awayEventGoals > match.AwayScore)
+            {
+                errorMessage = $"This goal would make recorded events total {homeEventGoals}-{awayEventGoals}, exceeding the match score of {match.HomeScore}-{match.AwayScore}.";
+                return;
+            }
+        }
+
         db.MatchEvents.Add(new MatchEvent
         {
             MatchId = model.MatchId,

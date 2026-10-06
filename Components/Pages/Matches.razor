@@ -34,36 +34,82 @@ else if (matches.Count == 0)
 }
 else
 {
-    <div class="match-grid">
-        @foreach (var match in matches)
-        {
-            <article class="match-card">
-                <div class="match-card-header">
-                    <span class="status-badge status-@match.Status.ToString().ToLowerInvariant()">@match.Status</span>
-                    <span>@match.MatchDate.ToString("MMM d, yyyy")</span>
-                </div>
-                <p class="eyebrow">@match.Tournament.Name · @match.Location</p>
-                <div class="match-scoreline">
-                    <strong>@match.HomeTeam.Name</strong>
-                    <span>@match.HomeScore - @match.AwayScore</span>
-                    <strong>@match.AwayTeam.Name</strong>
-                </div>
-                <div class="card-actions">
-                    <a href="/matches/@match.Id">Details</a>
-                    <AuthorizeView Roles="Administrator,Tournament Manager">
-                        <Authorized>
-                            <a href="/matches/edit/@match.Id">Edit</a>
-                            <a href="/matches/delete/@match.Id">Delete</a>
-                        </Authorized>
-                    </AuthorizeView>
-                </div>
-            </article>
-        }
+    <div class="form-grid match-filters" aria-label="Filter matches">
+        <div class="form-field">
+            <label for="tournament-filter">Tournament</label>
+            <select id="tournament-filter" @bind="selectedTournamentId">
+                <option value="0">All tournaments</option>
+                @foreach (var tournament in matches.Select(match => match.Tournament).DistinctBy(item => item.Id).OrderBy(item => item.Name))
+                {
+                    <option value="@tournament.Id">@tournament.Name</option>
+                }
+            </select>
+        </div>
+        <div class="form-field">
+            <label for="status-filter">Status</label>
+            <select id="status-filter" @bind="selectedStatus">
+                <option value="">All statuses</option>
+                @foreach (var status in Enum.GetValues<MatchStatus>())
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+        </div>
+        <div class="form-field">
+            <label for="start-date-filter">From</label>
+            <input id="start-date-filter" type="date" @bind="startDate" />
+        </div>
+        <div class="form-field">
+            <label for="end-date-filter">To</label>
+            <input id="end-date-filter" type="date" @bind="endDate" />
+        </div>
     </div>
+
+    var filteredMatches = GetFilteredMatches();
+    @if (filteredMatches.Count == 0)
+    {
+        <section class="empty-state">
+            <h2>No matches match these filters</h2>
+            <p>Try another tournament, status, or date range.</p>
+        </section>
+    }
+    else
+    {
+        <div class="match-grid">
+            @foreach (var match in filteredMatches)
+            {
+                <article class="match-card">
+                    <div class="match-card-header">
+                        <span class="status-badge status-@match.Status.ToString().ToLowerInvariant()">@match.Status</span>
+                        <span>@match.MatchDate.ToString("MMM d, yyyy")</span>
+                    </div>
+                    <p class="eyebrow">@match.Tournament.Name · @match.Location</p>
+                    <div class="match-scoreline">
+                        <strong>@match.HomeTeam.Name</strong>
+                        <span>@match.HomeScore - @match.AwayScore</span>
+                        <strong>@match.AwayTeam.Name</strong>
+                    </div>
+                    <div class="card-actions">
+                        <a href="/matches/@match.Id">Details</a>
+                        <AuthorizeView Roles="Administrator,Tournament Manager">
+                            <Authorized>
+                                <a href="/matches/edit/@match.Id">Edit</a>
+                                <a href="/matches/delete/@match.Id">Delete</a>
+                            </Authorized>
+                        </AuthorizeView>
+                    </div>
+                </article>
+            }
+        </div>
+    }
 }
 
 @code {
     private List<Match>? matches;
+    private int selectedTournamentId;
+    private MatchStatus? selectedStatus;
+    private DateTime? startDate;
+    private DateTime? endDate;
 
     protected override async Task OnInitializedAsync()
     {
@@ -76,5 +122,36 @@ else
             .OrderBy(match => match.MatchDate)
             .ThenBy(match => match.MatchTime)
             .ToListAsync();
+    }
+
+    private List<Match> GetFilteredMatches()
+    {
+        if (matches is null)
+        {
+            return new List<Match>();
+        }
+
+        var filtered = matches.AsEnumerable();
+        if (selectedTournamentId != 0)
+        {
+            filtered = filtered.Where(match => match.TournamentId == selectedTournamentId);
+        }
+
+        if (selectedStatus.HasValue)
+        {
+            filtered = filtered.Where(match => match.Status == selectedStatus.Value);
+        }
+
+        if (startDate.HasValue)
+        {
+            filtered = filtered.Where(match => match.MatchDate.Date >= startDate.Value.Date);
+        }
+
+        if (endDate.HasValue)
+        {
+            filtered = filtered.Where(match => match.MatchDate.Date <= endDate.Value.Date);
+        }
+
+        return filtered.ToList();
     }
 }

@@ -35,31 +35,46 @@ else if (events.Count == 0)
 else
 {
     <div class="event-list">
-        @foreach (var matchGroup in events.GroupBy(item => item.MatchId))
+        @foreach (var tournamentGroup in events.GroupBy(item => item.Match.TournamentId))
         {
-            var match = matchGroup.First().Match;
-            <section class="event-group">
-                <div class="event-group-heading">
-                    <h2>@match.HomeTeam.Name vs @match.AwayTeam.Name</h2>
-                    <span>@match.MatchDate.ToString("MMM d, yyyy")</span>
-                </div>
-                @foreach (var matchEvent in matchGroup.OrderBy(item => item.Minute ?? 121))
-                {
-                    <div class="event-row">
-                        <span class="event-minute">@(matchEvent.Minute is null ? "-" : $"{matchEvent.Minute}'")</span>
-                        <strong>@matchEvent.EventType</strong>
-                        <span>@matchEvent.GoalScorer.FirstName @matchEvent.GoalScorer.LastName</span>
-                        @if (matchEvent.AssistedByPlayer is not null)
-                        {
-                            <span>Assist: @matchEvent.AssistedByPlayer.FirstName @matchEvent.AssistedByPlayer.LastName</span>
-                        }
-                        <AuthorizeView Roles="Administrator,Tournament Manager">
-                            <Authorized>
-                                <a href="/match-events/delete/@matchEvent.Id">Delete</a>
-                            </Authorized>
-                        </AuthorizeView>
+            var tournament = tournamentGroup.First().Match.Tournament;
+            <section>
+                <div class="league-heading">
+                    <div>
+                        <p class="eyebrow">League</p>
+                        <h2>@tournament.Name</h2>
+                        <p>@tournament.Location</p>
                     </div>
-                }
+                </div>
+                <div class="event-list">
+                    @foreach (var matchGroup in tournamentGroup.GroupBy(item => item.MatchId))
+                    {
+                        var match = matchGroup.First().Match;
+                        <section class="event-group">
+                            <div class="event-group-heading">
+                                <h2>@match.HomeTeam.Name 🆚 @match.AwayTeam.Name</h2>
+                                <span>@match.MatchDate.ToString("MMM d, yyyy")</span>
+                            </div>
+                            @foreach (var matchEvent in matchGroup.OrderBy(item => item.Minute ?? 121))
+                            {
+                                <div class="event-row">
+                                    <span class="event-minute">@(matchEvent.Minute is null ? "-" : $"{matchEvent.Minute}'")</span>
+                                    <strong>@matchEvent.EventType</strong>
+                                    <span>@matchEvent.GoalScorer.FirstName @matchEvent.GoalScorer.LastName</span>
+                                    @if (matchEvent.AssistedByPlayer is not null)
+                                    {
+                                        <span>Assist: @matchEvent.AssistedByPlayer.FirstName @matchEvent.AssistedByPlayer.LastName</span>
+                                    }
+                                    <AuthorizeView Roles="Administrator,Tournament Manager">
+                                        <Authorized>
+                                            <a href="/match-events/delete/@matchEvent.Id">Delete</a>
+                                        </Authorized>
+                                    </AuthorizeView>
+                                </div>
+                            }
+                        </section>
+                    }
+                </div>
             </section>
         }
     </div>
@@ -75,9 +90,11 @@ else
             .AsNoTracking()
             .Include(item => item.Match).ThenInclude(match => match.HomeTeam)
             .Include(item => item.Match).ThenInclude(match => match.AwayTeam)
+            .Include(item => item.Match).ThenInclude(match => match.Tournament)
             .Include(item => item.GoalScorer)
             .Include(item => item.AssistedByPlayer)
-            .OrderBy(item => item.Match.MatchDate)
+            .OrderBy(item => item.Match.Tournament.StartDate)
+            .ThenBy(item => item.Match.MatchDate)
             .ThenBy(item => item.Minute)
             .ToListAsync();
     }

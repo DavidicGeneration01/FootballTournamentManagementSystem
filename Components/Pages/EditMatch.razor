@@ -144,6 +144,43 @@ else
             return;
         }
 
+        if (model.Status == MatchStatus.Ended)
+        {
+            var goalEvents = await db.MatchEvents
+                .Where(item => item.MatchId == Id
+                    && (item.EventType == MatchEventType.Goal
+                        || item.EventType == MatchEventType.PenaltyGoal
+                        || item.EventType == MatchEventType.OwnGoal))
+                .Select(item => new { item.EventType, ScorerTeamId = item.GoalScorer.TeamId })
+                .ToListAsync();
+
+            var homeEventGoals = 0;
+            var awayEventGoals = 0;
+            foreach (var goalEvent in goalEvents)
+            {
+                if (goalEvent.ScorerTeamId != model.HomeTeamId && goalEvent.ScorerTeamId != model.AwayTeamId)
+                {
+                    errorMessage = "Recorded goal events must belong to one of the selected match teams.";
+                    return;
+                }
+
+                var scoredByHomeTeam = goalEvent.ScorerTeamId == model.HomeTeamId;
+                if (goalEvent.EventType == MatchEventType.OwnGoal)
+                {
+                    if (scoredByHomeTeam) awayEventGoals++;
+                    else homeEventGoals++;
+                }
+                else if (scoredByHomeTeam) homeEventGoals++;
+                else awayEventGoals++;
+            }
+
+            if (homeEventGoals != model.HomeScore || awayEventGoals != model.AwayScore)
+            {
+                errorMessage = $"The recorded goal events total {homeEventGoals}-{awayEventGoals}, but the match score is {model.HomeScore}-{model.AwayScore}. Update the events or score before ending the match.";
+                return;
+            }
+        }
+
         match.TournamentId = model.TournamentId; match.HomeTeamId = model.HomeTeamId; match.AwayTeamId = model.AwayTeamId;
         match.MatchDate = model.MatchDate; match.Location = model.Location; match.Status = model.Status;
         match.HomeScore = model.HomeScore; match.AwayScore = model.AwayScore;

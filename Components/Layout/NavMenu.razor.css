@@ -16,12 +16,19 @@
 }
 
 .top-row {
-    height: 3.5rem;
+    height: auto;
+    min-height: 3.5rem;
     background-color: rgba(0,0,0,0.4);
+    box-sizing: border-box;
+    width: 100%;
 }
 
 .navbar-brand {
     font-size: 1.1rem;
+    line-height: 1.2;
+    max-width: calc(100% - 3.5rem);
+    white-space: normal;
+    overflow-wrap: break-word;
 }
 
 .bi {
@@ -89,7 +96,7 @@
     display: block;
 }
 
-@media (min-width: 641px) {
+@media (min-width: 1200px) {
     .navbar-toggler {
         display: none;
     }

@@ -72,6 +72,32 @@ else
 					</div>
 				}
 			}
+				<div class="dashboard-subsection">
+					<div class="panel-heading">
+						<div>
+							<p class="eyebrow">Final whistle</p>
+							<h2>Recent results</h2>
+						</div>
+					</div>
+					@if (summary.RecentResults.Count == 0)
+					{
+						<p class="panel-muted">No completed matches yet.</p>
+					}
+					else
+					{
+						@foreach (var match in summary.RecentResults)
+						{
+							<div class="fixture-row">
+								<div class="fixture-date">@match.MatchDate.ToString("MMM\ndd")</div>
+								<div>
+									<strong>@match.HomeTeam.Name <span>vs</span> @match.AwayTeam.Name</strong>
+									<small>@match.Tournament.Name · @match.HomeScore - @match.AwayScore</small>
+								</div>
+								<a href="/matches/@match.Id">Details</a>
+							</div>
+						}
+					}
+				</div>
 		</div>
 
 		<div class="dashboard-panel dashboard-panel-dark">
@@ -84,6 +110,30 @@ else
 				<a href="/matches/create">Schedule a match</a>
 				<a href="/standings">View standings</a>
 			</div>
+			<div class="dashboard-subsection">
+				<div class="panel-heading">
+					<div>
+						<p class="eyebrow">Across the leagues</p>
+						<h2>Current leaders</h2>
+					</div>
+					<a href="/standings">All standings</a>
+				</div>
+				@if (summary.CurrentLeaders.Count == 0)
+				{
+					<p>No goal events have been recorded yet.</p>
+				}
+				else
+				{
+					@foreach (var league in summary.CurrentLeaders)
+					{
+						<div class="leader-tournament">
+							<strong>@league.TournamentName</strong>
+							<p><span>Scorers:</span> @FormatLeaders(league.GoalScorers, "goals")</p>
+							<p><span>Assists:</span> @FormatLeaders(league.AssistProviders, "assists")</p>
+						</div>
+					}
+				}
+			</div>
 		</div>
 	</section>
 }
@@ -94,6 +144,27 @@ else
 	protected override async Task OnInitializedAsync()
 	{
 		await using var db = await DbFactory.CreateDbContextAsync();
+		var goalEvents = await db.MatchEvents
+			.AsNoTracking()
+			.Where(item => item.Match.Status == MatchStatus.Ended
+				&& (item.EventType == MatchEventType.Goal || item.EventType == MatchEventType.PenaltyGoal))
+			.Select(item => new
+			{
+				TournamentId = item.Match.TournamentId,
+				TournamentName = item.Match.Tournament.Name,
+				TournamentStatus = item.Match.Tournament.Status,
+				TournamentStartDate = item.Match.Tournament.StartDate,
+				GoalScorerId = item.GoalScorerId,
+				GoalScorerName = item.GoalScorer.FirstName + " " + item.GoalScorer.LastName,
+				GoalScorerTeamName = item.GoalScorer.Team.Name,
+				AssistedByPlayerId = item.AssistedByPlayerId,
+				AssistedByPlayerName = item.AssistedByPlayer == null
+					? null
+					: item.AssistedByPlayer.FirstName + " " + item.AssistedByPlayer.LastName,
+				AssistedByTeamName = item.AssistedByPlayer == null ? null : item.AssistedByPlayer.Team.Name
+			})
+			.ToListAsync();
+
 		summary = new DashboardSummary
 		{
 			Tournaments = await db.Tournaments.CountAsync(),
@@ -108,8 +179,64 @@ else
 				.Where(match => match.Status == MatchStatus.Scheduled)
 				.OrderBy(match => match.MatchDate)
 				.Take(4)
-				.ToListAsync()
+				.ToListAsync(),
+			RecentResults = await db.Matches
+				.AsNoTracking()
+				.Include(match => match.Tournament)
+				.Include(match => match.HomeTeam)
+				.Include(match => match.AwayTeam)
+				.Where(match => match.Status == MatchStatus.Ended)
+				.OrderByDescending(match => match.MatchDate)
+				.ThenByDescending(match => match.MatchTime)
+				.Take(4)
+				.ToListAsync(),
+			CurrentLeaders = goalEvents
+				.GroupBy(item => new { item.TournamentId, item.TournamentName, item.TournamentStatus, item.TournamentStartDate })
+				.Select(group =>
+				{
+					var scorers = group
+						.GroupBy(item => new { item.GoalScorerId, item.GoalScorerName, item.GoalScorerTeamName })
+						.Select(playerGroup => new LeaderboardPlayer(playerGroup.Key.GoalScorerName, playerGroup.Key.GoalScorerTeamName, playerGroup.Count()))
+						.ToList();
+					var assists = group
+						.Where(item => item.AssistedByPlayerId.HasValue && item.AssistedByPlayerName is not null && item.AssistedByTeamName is not null)
+						.GroupBy(item => new { PlayerId = item.AssistedByPlayerId!.Value, PlayerName = item.AssistedByPlayerName!, TeamName = item.AssistedByTeamName! })
+						.Select(playerGroup => new LeaderboardPlayer(playerGroup.Key.PlayerName, playerGroup.Key.TeamName, playerGroup.Count()))
+						.ToList();
+
+					return new TournamentLeaderSummary
+					{
+						TournamentName = group.Key.TournamentName,
+						TournamentStatus = group.Key.TournamentStatus,
+						TournamentStartDate = group.Key.TournamentStartDate,
+						GoalScorers = GetLeaders(scorers),
+						AssistProviders = GetLeaders(assists)
+					};
+				})
+				.OrderBy(item => item.TournamentStatus == TournamentStatus.Ongoing ? 0 : 1)
+				.ThenByDescending(item => item.TournamentStartDate)
+				.Take(3)
+				.ToList()
 		};
+	}
+
+	private static List<LeaderboardPlayer> GetLeaders(IEnumerable<LeaderboardPlayer> players)
+	{
+		var orderedPlayers = players
+			.OrderByDescending(player => player.Count)
+			.ThenBy(player => player.PlayerName)
+			.ToList();
+
+		return orderedPlayers.Count == 0
+			? orderedPlayers
+			: orderedPlayers.Where(player => player.Count == orderedPlayers[0].Count).ToList();
+	}
+
+	private static string FormatLeaders(IEnumerable<LeaderboardPlayer> players, string unit)
+	{
+		var formattedPlayers = players.Select(player => $"{player.PlayerName} ({player.TeamName}), {player.Count} {unit}");
+		var result = string.Join("; ", formattedPlayers);
+		return result.Length == 0 ? $"No {unit} recorded." : result;
 	}
 
 	private sealed class DashboardSummary
@@ -119,5 +246,18 @@ else
 		public int Players { get; init; }
 		public int Matches { get; init; }
 		public List<Match> UpcomingMatches { get; init; } = new();
+		public List<Match> RecentResults { get; init; } = new();
+		public List<TournamentLeaderSummary> CurrentLeaders { get; init; } = new();
 	}
+
+	private sealed class TournamentLeaderSummary
+	{
+		public string TournamentName { get; init; } = string.Empty;
+		public TournamentStatus TournamentStatus { get; init; }
+		public DateTime TournamentStartDate { get; init; }
+		public List<LeaderboardPlayer> GoalScorers { get; init; } = new();
+		public List<LeaderboardPlayer> AssistProviders { get; init; } = new();
+	}
+
+	private sealed record LeaderboardPlayer(string PlayerName, string TeamName, int Count);
 }
